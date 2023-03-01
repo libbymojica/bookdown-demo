@@ -1,0 +1,14 @@
+---
+title: "My Bookdown"
+author: "LM"
+date: "2023-03-01"
+site: bookdown::bookdown_site
+output: bookdown::gitbook
+documentclass: book
+description: "This is an example of using the bookdown package. The output format for this example is bookdown::gitbook."
+---
+
+```{r,  eval = FALSE, warning = FALSE, echo = TRUE}
+# My Intro {-}
+This is an example of a bookdown document. Here is the introduction.
+```

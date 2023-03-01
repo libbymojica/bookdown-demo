@@ -1,0 +1,199 @@
+# Denouement (The End)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, eval=TRUE, message=FALSE, warning=FALSE, rows.print=5, fig.width=9)
+```
+
+## Lesson Objectives:
+
+In this lesson you will take all of the skills you have learned up to this point and use them on a completely new set of data. This lesson has **five exercises** that need to be completed.
+
+#### Necessary packages:
+
+```{r}
+library(tidyverse)
+library(plotly)
+library(scales)
+library(httr)
+library(jsonlite)
+library(dataRetrieval)
+library(sf) # for the map
+library(mapview) # for making the interactive plot
+```
+
+## Streaflow Datasets
+
+We are interested in looking at how the Cache la Poudre River's flow changes as it travels out of the mountainous Poudre Canyon and through Fort Collins.
+
+There are four stream flow monitoring sites on the Poudre that we are interested in: two managed by the US Geological Survey (USGS), and two managed by the Colorado Division of Water Resources (CDWR):
+
+```{r, echo = F}
+# Making a tibble to convert into coordinates for our sites
+poudre_sites <- tibble(site = c("Canyon Mouth", "Lincoln Bridge", "Environmental Learning Center", "Below Fossil Creek Reservoir"),
+                       site_no = c("CLAFTCCO", "06752260", "06752280", "CLARIVCO"),
+                       lat = c(40.6645, 40.5880833, 40.5519269, 40.5013),
+                       long = c(-105.2242, -105.0692222, -105.011365, -104.967),
+                       source = c("CDWR", "USGS", "USGS", "CDWR")) %>%
+  sf::st_as_sf(coords = c("long", "lat"), crs = 4269)
+
+# Mapview is another package that creates interactive plots, not necessary for you to know yet!
+mapview::mapview(poudre_sites, zcol = "site", layer.name = "Poudre River Monitoring")
+```
+
+### USGS `dataRetrieval` R package
+
+To pull data for USGS stream gages, we can use the `dataRetrieval` package, which is a USGS-managed set of functions that, much like our functions from Lesson 3.1, pull data from the USGS's data warehouse using an API. Here we will pull flow data for our USGS stream gages of interest for the last two water years:
+
+```{r}
+# pulls USGS daily ('dv') stream flow data:
+usgs <- dataRetrieval::readNWISdv(siteNumbers = c("06752260", "06752280"), # USGS site code for the Poudre River at the Lincoln Bridge and the ELC
+                               parameterCd = "00060", # USGS code for stream flow
+                               startDate = "2020-10-01", # YYYY-MM-DD formatting
+                               endDate = "2022-09-30") %>% # YYYY-MM-DD formatting
+  rename(q_cfs = X_00060_00003) %>% # USGS code for stream flow units in cubic feet per second (CFS)
+  mutate(Date = lubridate::ymd(Date), # convert the Date column to "Date" formatting using the `lubridate` package
+         Site = case_when(site_no == "06752260" ~ "Lincoln", 
+                          site_no == "06752280" ~ "Boxelder"))
+```
+
+### CDWR's API
+
+Alas, CDWR does NOT have an R package that pulls data from [their API](https://dwr.state.co.us/Rest/GET/Help#Datasets&#SurfaceWaterController&#gettingstarted&#jsonxml), but they do have user-friendly directions on how to develop API calls.
+
+Using the "URL generator" steps outlined for their [daily surface water time series data set](https://dwr.state.co.us/Rest/GET/Help/SurfaceWaterTSDayGenerator), we can get the last two water years of CFS data for the Poudre at the Canyon mouth (site abbreviation = CLAFTCCO) using the following URL:
+
+<https://dwr.state.co.us/Rest/GET/api/v2/surfacewater/surfacewatertsday/?format=json&dateFormat=dateOnly&fields=abbrev%2CmeasDate%2Cvalue%2CmeasUnit&encoding=deflate&abbrev=CLAFTCCO&min-measDate=10%2F01%2F2020&max-measDate=09%2F30%2F2022>
+
+## Exercise #1 {style="color: maroon"}
+
+Using the URL above as the starting point, develop a function that creates a data frame of CDWR daily flow (CFS) data for a selected range of water years, for any site. (HINT: The final product of our API pull is a list with additional metadata about our API pull... how do we index a list to extract the time series flow data?)
+
+```{r create function}
+co_water_data <- function(site, start_wyear = 2021, end_wyear = 2022){
+  raw_data <- GET(url = paste0(
+  "https://dwr.state.co.us/Rest/GET/api/v2/surfacewater/",
+  "surfacewatertsday/?format=json&dateFormat=dateOnly&fields",
+  "=abbrev%2CmeasDate%2Cvalue%2CmeasUnit&encoding=deflate&abbrev=",
+  site, 
+  "&min-measDate=10%2F01%2F",
+  start_wyear - 1,
+  "&max-measDate=09%2F30%2F",
+  end_wyear
+  ))
+  
+  # convert content to text
+extracted_data <- httr::content(raw_data, as = "text", encoding = "UTF-8") 
+
+#parse text from JSON to data frame
+final_data <- jsonlite::fromJSON(extracted_data)
+
+return(final_data)
+
+}
+```
+
+
+```{r pull data}
+cdwr <- co_water_data(site = "CLARIVCO", 
+                      start_wyear = 2020, end_wyear = 2021)
+```
+
+## Exercise #2 {style="color: maroon"}
+
+Map over the function you developed in Exercise #1 to pull flow data for CLAFTCCO and CLARIVCO for the 2021 and 2022 water years.
+
+```{r}
+#set values for the loop
+sitecodes <- c('CLARIVCO', 'CLAFTCCO')
+
+#create empty vector list for loop to use
+outputsite_floop <- vector("list", length = length(sitecodes))
+
+#construct loop
+for(i in 1:length(sitecodes)){
+  
+  outputsite_floop[[i]] <-
+    co_water_data(site = sitecodes[i], start_wyear = 2021, end_wyear = 2022)
+}
+#combine into a single dataframe 
+  cdwr <- dplyr::bind_rows(outputsite_floop)
+
+# extract embedded "Result List" so columns can be accessed as normal dataframe
+cdwr <- cdwr$ResultList
+
+```
+
+```{r}
+# can use the map option instead of loop, creates the same output as code above
+output_map <- sitecodes %>% 
+  map(~ co_water_data(site = .))
+
+outputpark_map <- sitecodes %>% 
+  map(~ co_water_data(site = ., start_wyear = 2021, end_wyear = 2022))
+
+cdwr <- bind_rows(output_map)
+
+# extract embedded "Result List" so columns can be accessed as normal dataframe
+cdwr <- cdwr$ResultList
+```
+
+## Exercise #3 {style="color: maroon"}
+
+Join our USGS and CDWR data frames together (`bind_rows()`, perhaps?), then create an interactive ggplot of discharge (in CFS) through time displaying all four of our monitoring sites. Be sure all axes and labels are clear.
+
+```{r}
+library(lubridate)
+# prep cdwr dataframe so columns names match usgs dataframe, trim for only columns needed
+cdwr <- cdwr %>%
+  select(Site = abbrev, Date = measDate, q_cfs = value) 
+
+# convert the Date column to "Date" formatting using the `lubridate` package
+cdwr$Date <- lubridate::ymd(cdwr$Date) 
+
+# trim usgs dataframe to only the columns we need
+usgs <- usgs %>%
+  select(Site, Date, q_cfs)
+```
+
+```{r}
+#join cdwr and usgs dataframes using bind_rows()
+multi_sites <- bind_rows(cdwr, usgs)
+str(multi_sites)
+```
+
+## Exercise #4 {style="color: maroon"}
+
+Create an interactive plot of the daily difference in discharge between the Cache la Poudre River at the canyon mouth and each of the sites downstream. Make sure your plot axes are clear.
+
+```{r}
+multisite_wide <- multi_sites %>%
+  pivot_wider(., names_from = Site, values_from = q_cfs)
+
+multisite_narrow <- multisite_wide %>%
+  pivot_longer(cols = -c(Date,CLAFTCCO),
+               names_to = "Site",
+               values_to = "cfs") %>%
+  mutate(downstream_diff = cfs-CLAFTCCO)
+
+plotly::ggplotly(
+    ggplot(multisite_narrow,
+           aes(x = Date, y = downstream_diff, color = Site))+
+    geom_line(aes(size = Site)) +
+    scale_size_manual(values = c(2,1,0.5)) + 
+  labs(y = "Daily CFS Difference from Canyon Mouth", title = "Discharge Differences along Cache la Poudre River")
+  )
+```
+
+## Exercise #5 {style="color: maroon"}
+
+For each of our downstream locations, calculate how many days the canyon mouth had LOWER flow. Is this what you expected? Why or why not?
+
+
+```{r}
+multisite_narrow %>% 
+  count(Site, LowerFlow = downstream_diff > 0)
+#I expected most downstream cfs measurements to be lower than at the Canyon Mouth as different water needs were removed along the river by the City of Fort Collins and others. The tibble shows that yes a majority of data support downstream guages were lower than the canyon mouth.
+
+#In October 2020 there was a large release of water registered at the downstream gauges. This might relate to the Horsetooth Outlet Project and repairs there that might have resulted in water releases into the Poudre.
+```
+
